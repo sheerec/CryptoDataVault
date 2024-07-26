@@ -1,0 +1,100 @@
+import json
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+from web3 import Web3
+from cryptography.fernet import Fernet
+
+class CryptoDataVault:
+    def __init__(self, infura_url: str, storage_file: str, key_file: str):
+        self.web3 = Web3(Web3.HTTPProvider(infura_url))
+        self.storage_file = storage_file
+        self.key_file = key_file
+        self.cipher = self._load_cipher()
+        self.data = self._load_data()
+
+    def _generate_key(self) -> bytes:
+        return Fernet.generate_key()
+
+    def _load_cipher(self) -> Fernet:
+        if not os.path.exists(self.key_file):
+            key = self._generate_key()
+            with open(self.key_file, 'wb') as keyfile:
+                keyfile.write(key)
+        with open(self.key_file, 'rb') as keyfile:
+            key = keyfile.read()
+        return Fernet(key)
+
+    def _load_data(self) -> dict:
+        if not os.path.exists(self.storage_file):
+            return {}
+        with open(self.storage_file, 'rb') as file:
+            encrypted_data = file.read()
+        decrypted_data = self.cipher.decrypt(encrypted_data)
+        return json.loads(decrypted_data.decode())
+
+    def _save_data(self):
+        with open(self.storage_file, 'wb') as file:
+            encrypted_data = self.cipher.encrypt(json.dumps(self.data).encode())
+            file.write(encrypted_data)
+
+    def store_wallet_balance(self, address: str, balance: float):
+        self.data[address] = {
+            'balance': balance,
+            'last_updated': pd.Timestamp.now().isoformat()
+        }
+        self._save_data()
+
+    def get_wallet_balance(self, address: str) -> dict:
+        return self.data.get(address, {'balance': None, 'last_updated': None})
+
+    def fetch_and_store_balance(self, address: str):
+        balance_wei = self.web3.eth.get_balance(address)
+        balance_eth = self.web3.fromWei(balance_wei, 'ether')
+        self.store_wallet_balance(address, balance_eth)
+
+    def analyze_transactions(self, transactions: list) -> pd.DataFrame:
+        df = pd.DataFrame(transactions)
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+        df['value'] = df['value'].astype(float)
+        return df
+
+    def plot_transaction_volume(self, transactions: list):
+        df = self.analyze_transactions(transactions)
+        if df.empty:
+            print("No transaction data available to plot.")
+            return
+        plt.figure(figsize=(12, 6))
+        df.groupby(df['timestamp'].dt.date)['value'].sum().plot()
+        plt.title('Daily Transaction Volume')
+        plt.xlabel('Date')
+        plt.ylabel('Volume (ETH)')
+        plt.grid(True)
+        plt.show()
+
+# Example Usage
+if __name__ == "__main__":
+    INFURA_URL = 'https://mainnet.infura.io/v3/YOUR_INFURA_PROJECT_ID'
+    STORAGE_FILE = 'crypto_data.json'
+    KEY_FILE = 'crypto_key.key'
+
+    vault = CryptoDataVault(INFURA_URL, STORAGE_FILE, KEY_FILE)
+
+    # Fetch and store wallet balance
+    wallet_address = '0xYourWalletAddressHere'
+    vault.fetch_and_store_balance(wallet_address)
+    print("Wallet balance stored.")
+
+    # Retrieve stored wallet balance
+    balance_data = vault.get_wallet_balance(wallet_address)
+    print("Stored Wallet Balance:", balance_data)
+
+    # Example transactions data
+    transactions = [
+        {"timestamp": 1672531200, "value": 0.1},
+        {"timestamp": 1672617600, "value": 0.2},
+        {"timestamp": 1672704000, "value": 0.15},
+    ]
+
+    # Plot transaction volume
+    vault.plot_transaction_volume(transactions)
